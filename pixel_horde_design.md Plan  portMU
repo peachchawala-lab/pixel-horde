@@ -1,0 +1,1613 @@
+# 🎮 Pixel Horde — Game Design Document
+
+> **Genre:** Co-op Horde Survival · **Players:** 1–4 · **Round:** 8–10 min
+> **Tech:** Phaser 3 + TypeScript · **Art:** Pixel Art 16×16 · **Platform:** Mobile + PC
+
+---
+
+## 1. System Architecture
+
+### 1.1 High-Level Architecture
+
+```mermaid
+graph TB
+    subgraph Client["🖥️ Client (Phaser 3 + TypeScript)"]
+        UI["UI Layer<br/>HUD / Menus / Overlays"]
+        GE["Game Engine<br/>Phaser 3 Scenes"]
+        ECS["Entity System<br/>Players / Enemies / Projectiles"]
+        NET_C["Network Client<br/>Socket.IO Client"]
+        AUDIO["Audio Manager<br/>SFX + Music"]
+        INPUT["Input Manager<br/>Touch / Keyboard / Gamepad"]
+    end
+
+    subgraph Server["⚙️ Server (Node.js + Socket.IO)"]
+        NET_S["Network Server<br/>Socket.IO"]
+        GM["Game Manager<br/>Room / Session"]
+        AUTH["Auth State<br/>Player Identity"]
+        SIM["Server Simulation<br/>Authority Logic"]
+        DB["Data Store<br/>SQLite / JSON"]
+    end
+
+    UI --> GE
+    GE --> ECS
+    GE --> AUDIO
+    INPUT --> GE
+    NET_C <-->|WebSocket| NET_S
+    NET_S --> GM
+    GM --> SIM
+    GM --> AUTH
+    SIM --> DB
+```
+
+### 1.2 Architecture Pattern
+
+| Layer | Pattern | รายละเอียด |
+|-------|---------|------------|
+| **Game Scenes** | State Machine | `Boot → Preload → MainMenu → Lobby → Game → GameOver → Leaderboard` |
+| **Entities** | Component-Based | แต่ละ Entity ประกอบด้วย Components (Health, Movement, Combat, etc.) |
+| **Networking** | Client-Authoritative with Server Validation | Client ส่ง input → Server validate → broadcast state |
+| **UI** | Observer Pattern | UI subscribe กับ game events เพื่อ update HUD |
+| **Skills** | Strategy Pattern | แต่ละ Skill เป็น class ที่ implement `ISkill` interface |
+| **Spawner** | Factory + Weight-based RNG | สร้างศัตรูจาก config ด้วย weighted random |
+
+### 1.3 Networking Model
+
+```mermaid
+sequenceDiagram
+    participant P1 as Player 1 (Host)
+    participant S as Server
+    participant P2 as Player 2
+
+    P1->>S: createRoom()
+    S-->>P1: roomCode: "ABCD"
+    P2->>S: joinRoom("ABCD")
+    S-->>P1: playerJoined(P2)
+    S-->>P2: roomState(players)
+
+    Note over P1,P2: Game Start
+
+    loop Every Frame (60fps client / 20 tick server)
+        P1->>S: input { move, skillUse }
+        P2->>S: input { move, skillUse }
+        S->>S: simulate(inputs)
+        S-->>P1: gameState { entities, scores }
+        S-->>P2: gameState { entities, scores }
+    end
+
+    Note over S: Round Timer 8-10 min
+
+    S-->>P1: gameOver { stats, xp }
+    S-->>P2: gameOver { stats, xp }
+```
+
+### 1.4 Core Game Loop
+
+```mermaid
+flowchart LR
+    A[Input] --> B[Move Players]
+    B --> C[Auto Attack<br/>Nearest Enemy]
+    C --> D[Spawn Enemies<br/>Wave System]
+    D --> E[Update Entities<br/>AI / Physics]
+    E --> F[Check Collisions]
+    F --> G[Apply Damage]
+    G --> H{Enemy Dead?}
+    H -->|Yes| I[Drop XP Gem]
+    H -->|No| E
+    I --> J{Level Up?}
+    J -->|Yes| K[Show 3 Random Skills<br/>Player Picks 1]
+    J -->|No| A
+    K --> A
+```
+
+### 1.5 Client Architecture Detail
+
+```mermaid
+graph TB
+    subgraph Scenes
+        S1[BootScene]
+        S2[PreloadScene]
+        S3[MainMenuScene]
+        S4[LobbyScene]
+        S5[GameScene]
+        S6[GameOverScene]
+        S7[LeaderboardScene]
+    end
+
+    subgraph Managers
+        M1[InputManager]
+        M2[AudioManager]
+        M3[NetworkManager]
+        M4[SpawnManager]
+        M5[WaveManager]
+        M6[SkillManager]
+        M7[AchievementManager]
+        M8[CameraManager]
+        M9[ParticleManager]
+    end
+
+    subgraph Entities
+        E1[Player]
+        E2[Enemy]
+        E3[Projectile]
+        E4[XPGem]
+        E5[PickupItem]
+    end
+
+    subgraph Components
+        C1[HealthComponent]
+        C2[MovementComponent]
+        C3[CombatComponent]
+        C4[SpriteComponent]
+        C5[CollisionComponent]
+        C6[AIComponent]
+    end
+
+    S5 --> Managers
+    S5 --> Entities
+    Entities --> Components
+```
+
+---
+
+## 2. Folder Structure
+
+```
+pixel-horde/
+├── 📁 client/                          # Phaser 3 Client
+│   ├── 📁 public/
+│   │   ├── index.html
+│   │   └── favicon.ico
+│   │
+│   ├── 📁 src/
+│   │   ├── 📁 assets/                  # Static Assets
+│   │   │   ├── 📁 sprites/
+│   │   │   │   ├── 📁 characters/      # Player spritesheets
+│   │   │   │   ├── 📁 enemies/         # Enemy spritesheets
+│   │   │   │   ├── 📁 projectiles/     # Bullet / spell sprites
+│   │   │   │   ├── 📁 pickups/         # XP gems, items
+│   │   │   │   └── 📁 effects/         # Hit, explosion, heal FX
+│   │   │   │
+│   │   │   ├── 📁 tilesets/            # Map tiles
+│   │   │   │   ├── ground.png
+│   │   │   │   ├── walls.png
+│   │   │   │   └── decorations.png
+│   │   │   │
+│   │   │   ├── 📁 ui/                  # UI elements
+│   │   │   │   ├── 📁 icons/           # Skill icons, status icons
+│   │   │   │   ├── 📁 buttons/         # Menu buttons
+│   │   │   │   ├── 📁 panels/          # Dialog panels, frames
+│   │   │   │   ├── 📁 fonts/           # Bitmap fonts
+│   │   │   │   └── 📁 hud/             # HP bar, XP bar, timer
+│   │   │   │
+│   │   │   ├── 📁 audio/
+│   │   │   │   ├── 📁 bgm/            # Background music
+│   │   │   │   ├── 📁 sfx/            # Sound effects
+│   │   │   │   └── 📁 ui/             # UI click sounds
+│   │   │   │
+│   │   │   └── 📁 maps/               # Tilemap JSON (Tiled)
+│   │   │       ├── arena_forest.json
+│   │   │       ├── arena_dungeon.json
+│   │   │       └── arena_graveyard.json
+│   │   │
+│   │   ├── 📁 config/                 # Game Configuration
+│   │   │   ├── game.config.ts         # Phaser config
+│   │   │   ├── balance.config.ts      # Game balance values
+│   │   │   ├── wave.config.ts         # Wave spawning config
+│   │   │   ├── skill.config.ts        # Skill definitions
+│   │   │   ├── enemy.config.ts        # Enemy stats
+│   │   │   ├── achievement.config.ts  # Achievement definitions
+│   │   │   └── constants.ts           # Global constants
+│   │   │
+│   │   ├── 📁 scenes/                 # Phaser Scenes
+│   │   │   ├── BootScene.ts
+│   │   │   ├── PreloadScene.ts
+│   │   │   ├── MainMenuScene.ts
+│   │   │   ├── LobbyScene.ts
+│   │   │   ├── GameScene.ts
+│   │   │   ├── GameOverScene.ts
+│   │   │   ├── LeaderboardScene.ts
+│   │   │   └── SettingsScene.ts
+│   │   │
+│   │   ├── 📁 entities/               # Game Entities
+│   │   │   ├── 📁 player/
+│   │   │   │   ├── Player.ts
+│   │   │   │   ├── PlayerAnimations.ts
+│   │   │   │   └── PlayerController.ts
+│   │   │   │
+│   │   │   ├── 📁 enemies/
+│   │   │   │   ├── BaseEnemy.ts
+│   │   │   │   ├── Zombie.ts
+│   │   │   │   ├── Skeleton.ts
+│   │   │   │   ├── Bat.ts
+│   │   │   │   ├── Slime.ts
+│   │   │   │   ├── Ghost.ts
+│   │   │   │   ├── Orc.ts
+│   │   │   │   ├── Necromancer.ts
+│   │   │   │   └── BossGolem.ts
+│   │   │   │
+│   │   │   ├── 📁 projectiles/
+│   │   │   │   ├── BaseProjectile.ts
+│   │   │   │   ├── Bullet.ts
+│   │   │   │   ├── Arrow.ts
+│   │   │   │   ├── Fireball.ts
+│   │   │   │   ├── LightningBolt.ts
+│   │   │   │   └── Shuriken.ts
+│   │   │   │
+│   │   │   └── 📁 pickups/
+│   │   │       ├── BasePickup.ts
+│   │   │       ├── XPGem.ts
+│   │   │       ├── HealthOrb.ts
+│   │   │       └── MagnetPickup.ts
+│   │   │
+│   │   ├── 📁 components/             # Reusable Components
+│   │   │   ├── HealthComponent.ts
+│   │   │   ├── MovementComponent.ts
+│   │   │   ├── CombatComponent.ts
+│   │   │   ├── CollisionComponent.ts
+│   │   │   ├── AIComponent.ts
+│   │   │   ├── AnimationComponent.ts
+│   │   │   └── StatusEffectComponent.ts
+│   │   │
+│   │   ├── 📁 skills/                 # Skill System
+│   │   │   ├── ISkill.ts              # Skill interface
+│   │   │   ├── SkillRegistry.ts       # All skill definitions
+│   │   │   ├── 📁 offensive/
+│   │   │   │   ├── FireCircle.ts
+│   │   │   │   ├── LightningStrike.ts
+│   │   │   │   ├── PoisonCloud.ts
+│   │   │   │   ├── ShurikenOrbit.ts
+│   │   │   │   ├── MeteorShower.ts
+│   │   │   │   └── ChainLightning.ts
+│   │   │   │
+│   │   │   ├── 📁 defensive/
+│   │   │   │   ├── Shield.ts
+│   │   │   │   ├── Regeneration.ts
+│   │   │   │   ├── Thorns.ts
+│   │   │   │   └── DodgeRoll.ts
+│   │   │   │
+│   │   │   └── 📁 passive/
+│   │   │       ├── SpeedBoost.ts
+│   │   │       ├── DamageUp.ts
+│   │   │       ├── XPMagnet.ts
+│   │   │       ├── CritChance.ts
+│   │   │       ├── CooldownReduction.ts
+│   │   │       └── MultiShot.ts
+│   │   │
+│   │   ├── 📁 managers/               # Game Managers
+│   │   │   ├── InputManager.ts
+│   │   │   ├── AudioManager.ts
+│   │   │   ├── NetworkManager.ts
+│   │   │   ├── SpawnManager.ts
+│   │   │   ├── WaveManager.ts
+│   │   │   ├── SkillManager.ts
+│   │   │   ├── AchievementManager.ts
+│   │   │   ├── CameraManager.ts
+│   │   │   ├── ParticleManager.ts
+│   │   │   ├── LeaderboardManager.ts
+│   │   │   └── ObjectPoolManager.ts
+│   │   │
+│   │   ├── 📁 ui/                     # UI Components
+│   │   │   ├── 📁 hud/
+│   │   │   │   ├── HUD.ts
+│   │   │   │   ├── HealthBar.ts
+│   │   │   │   ├── XPBar.ts
+│   │   │   │   ├── WaveIndicator.ts
+│   │   │   │   ├── TimerDisplay.ts
+│   │   │   │   ├── KillCounter.ts
+│   │   │   │   ├── MiniMap.ts
+│   │   │   │   └── PlayerStatusBar.ts
+│   │   │   │
+│   │   │   ├── 📁 menus/
+│   │   │   │   ├── MainMenu.ts
+│   │   │   │   ├── PauseMenu.ts
+│   │   │   │   ├── SettingsMenu.ts
+│   │   │   │   └── CharacterSelect.ts
+│   │   │   │
+│   │   │   ├── 📁 overlays/
+│   │   │   │   ├── SkillPickOverlay.ts
+│   │   │   │   ├── LevelUpOverlay.ts
+│   │   │   │   ├── AchievementPopup.ts
+│   │   │   │   ├── DamageNumber.ts
+│   │   │   │   └── GameOverOverlay.ts
+│   │   │   │
+│   │   │   └── 📁 common/
+│   │   │       ├── Button.ts
+│   │   │       ├── Panel.ts
+│   │   │       ├── ProgressBar.ts
+│   │   │       ├── Tooltip.ts
+│   │   │       └── ScrollList.ts
+│   │   │
+│   │   ├── 📁 systems/                # Game Systems
+│   │   │   ├── CombatSystem.ts
+│   │   │   ├── CollisionSystem.ts
+│   │   │   ├── XPSystem.ts
+│   │   │   ├── LevelUpSystem.ts
+│   │   │   ├── StatusEffectSystem.ts
+│   │   │   └── AutoAttackSystem.ts
+│   │   │
+│   │   ├── 📁 utils/                  # Utilities
+│   │   │   ├── MathUtils.ts
+│   │   │   ├── RandomUtils.ts
+│   │   │   ├── ObjectPool.ts
+│   │   │   ├── EventBus.ts
+│   │   │   ├── Timer.ts
+│   │   │   ├── Storage.ts
+│   │   │   └── Debug.ts
+│   │   │
+│   │   ├── 📁 types/                  # TypeScript Types
+│   │   │   ├── game.types.ts
+│   │   │   ├── entity.types.ts
+│   │   │   ├── skill.types.ts
+│   │   │   ├── network.types.ts
+│   │   │   ├── ui.types.ts
+│   │   │   └── achievement.types.ts
+│   │   │
+│   │   ├── 📁 network/                # Networking
+│   │   │   ├── SocketClient.ts
+│   │   │   ├── NetworkEvents.ts
+│   │   │   ├── StateSync.ts
+│   │   │   ├── InputBuffer.ts
+│   │   │   └── Interpolation.ts
+│   │   │
+│   │   └── main.ts                    # Entry Point
+│   │
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── .eslintrc.json
+│
+├── 📁 server/                          # Game Server
+│   ├── 📁 src/
+│   │   ├── 📁 core/
+│   │   │   ├── Server.ts
+│   │   │   ├── RoomManager.ts
+│   │   │   ├── GameRoom.ts
+│   │   │   └── GameLoop.ts
+│   │   │
+│   │   ├── 📁 game/
+│   │   │   ├── ServerGameState.ts
+│   │   │   ├── ServerSpawnManager.ts
+│   │   │   ├── ServerCombatResolver.ts
+│   │   │   └── ServerWaveManager.ts
+│   │   │
+│   │   ├── 📁 network/
+│   │   │   ├── SocketServer.ts
+│   │   │   ├── MessageHandler.ts
+│   │   │   └── NetworkEvents.ts
+│   │   │
+│   │   ├── 📁 data/
+│   │   │   ├── LeaderboardStore.ts
+│   │   │   ├── AchievementStore.ts
+│   │   │   └── PlayerStore.ts
+│   │   │
+│   │   ├── 📁 types/
+│   │   │   ├── server.types.ts
+│   │   │   └── room.types.ts
+│   │   │
+│   │   └── main.ts
+│   │
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── 📁 shared/                          # Shared Types & Logic
+│   ├── 📁 types/
+│   │   ├── protocol.ts                # Network protocol types
+│   │   ├── game-state.ts              # Shared game state
+│   │   └── events.ts                  # Event enums
+│   │
+│   ├── 📁 config/
+│   │   ├── balance.ts                 # Shared balance values
+│   │   └── constants.ts               # Shared constants
+│   │
+│   └── 📁 utils/
+│       ├── math.ts
+│       └── validation.ts
+│
+├── 📁 tools/                           # Development Tools
+│   ├── 📁 map-editor/                 # Tiled project files
+│   └── 📁 sprite-editor/             # Aseprite project files
+│
+├── package.json                        # Root workspace
+├── README.md
+└── .gitignore
+```
+
+---
+
+## 3. Class Diagram
+
+### 3.1 Core Entity Hierarchy
+
+```mermaid
+classDiagram
+    class BaseEntity {
+        +string id
+        +number x
+        +number y
+        +Phaser.GameObjects.Sprite sprite
+        +Map~string, IComponent~ components
+        +addComponent(component: IComponent)
+        +getComponent~T~(name: string): T
+        +update(delta: number)
+        +destroy()
+    }
+
+    class Player {
+        +string playerId
+        +string name
+        +PlayerClass characterClass
+        +number level
+        +number xp
+        +number xpToNext
+        +ISkill[] activeSkills
+        +PlayerStats stats
+        +boolean isLocal
+        +handleInput(input: InputState)
+        +levelUp()
+        +addSkill(skill: ISkill)
+        +autoAttack()
+        +collectXP(amount: number)
+    }
+
+    class BaseEnemy {
+        +EnemyType type
+        +number damage
+        +number speed
+        +number xpReward
+        +AIBehavior aiBehavior
+        +Player target
+        +findTarget(players: Player[])
+        +attack()
+        +onDeath()
+        +dropLoot()
+    }
+
+    class BaseProjectile {
+        +number damage
+        +number speed
+        +number lifetime
+        +number pierceCount
+        +string ownerId
+        +Vector2 direction
+        +move(delta: number)
+        +onHit(target: BaseEnemy)
+        +onExpire()
+    }
+
+    class BasePickup {
+        +PickupType type
+        +number value
+        +number magnetRadius
+        +boolean isAttracted
+        +attract(player: Player)
+        +onCollect(player: Player)
+    }
+
+    BaseEntity <|-- Player
+    BaseEntity <|-- BaseEnemy
+    BaseEntity <|-- BaseProjectile
+    BaseEntity <|-- BasePickup
+
+    BaseEnemy <|-- Zombie
+    BaseEnemy <|-- Skeleton
+    BaseEnemy <|-- Bat
+    BaseEnemy <|-- Slime
+    BaseEnemy <|-- Ghost
+    BaseEnemy <|-- Orc
+    BaseEnemy <|-- Necromancer
+    BaseEnemy <|-- BossGolem
+
+    BaseProjectile <|-- Bullet
+    BaseProjectile <|-- Arrow
+    BaseProjectile <|-- Fireball
+    BaseProjectile <|-- LightningBolt
+    BaseProjectile <|-- Shuriken
+
+    BasePickup <|-- XPGem
+    BasePickup <|-- HealthOrb
+    BasePickup <|-- MagnetPickup
+```
+
+### 3.2 Component System
+
+```mermaid
+classDiagram
+    class IComponent {
+        <<interface>>
+        +string name
+        +update(delta: number)
+        +destroy()
+    }
+
+    class HealthComponent {
+        +number maxHP
+        +number currentHP
+        +number armor
+        +number regenRate
+        +takeDamage(amount: number, type: DamageType): number
+        +heal(amount: number)
+        +isDead(): boolean
+        +getHPPercentage(): number
+    }
+
+    class MovementComponent {
+        +number speed
+        +number baseSpeed
+        +Vector2 velocity
+        +boolean isKnockedBack
+        +move(direction: Vector2)
+        +applyKnockback(force: Vector2, duration: number)
+        +setSpeedMultiplier(mult: number)
+    }
+
+    class CombatComponent {
+        +number baseDamage
+        +number attackSpeed
+        +number attackRange
+        +number critChance
+        +number critMultiplier
+        +number cooldownTimer
+        +boolean canAttack(): boolean
+        +calculateDamage(): DamageResult
+        +resetCooldown()
+    }
+
+    class AIComponent {
+        +AIState currentState
+        +Player targetPlayer
+        +number aggroRange
+        +number attackRange
+        +updateAI(players: Player[], delta: number)
+        +chaseTarget(delta: number)
+        +attackTarget()
+        +setState(state: AIState)
+    }
+
+    class StatusEffectComponent {
+        +StatusEffect[] activeEffects
+        +addEffect(effect: StatusEffect)
+        +removeEffect(effectId: string)
+        +hasEffect(type: EffectType): boolean
+        +tick(delta: number)
+    }
+
+    class AnimationComponent {
+        +string currentAnim
+        +play(animKey: string, loop: boolean)
+        +stop()
+        +setFlipX(flip: boolean)
+    }
+
+    IComponent <|.. HealthComponent
+    IComponent <|.. MovementComponent
+    IComponent <|.. CombatComponent
+    IComponent <|.. AIComponent
+    IComponent <|.. StatusEffectComponent
+    IComponent <|.. AnimationComponent
+```
+
+### 3.3 Skill System
+
+```mermaid
+classDiagram
+    class ISkill {
+        <<interface>>
+        +string id
+        +string name
+        +string description
+        +string iconKey
+        +SkillRarity rarity
+        +SkillCategory category
+        +number maxLevel
+        +number currentLevel
+        +number cooldown
+        +activate(owner: Player, scene: GameScene)
+        +upgrade()
+        +getDescription(): string
+    }
+
+    class SkillManager {
+        -ISkill[] allSkills
+        -ISkill[] playerSkills
+        -SkillRarity[] rarityWeights
+        +getRandomSkills(count: number, exclude: string[]): ISkill[]
+        +addSkillToPlayer(player: Player, skill: ISkill)
+        +upgradeSkill(skillId: string)
+        +getAvailableUpgrades(player: Player): ISkill[]
+    }
+
+    class SkillRegistry {
+        -Map~string, SkillFactory~ registry
+        +register(id: string, factory: SkillFactory)
+        +create(id: string): ISkill
+        +getAll(): ISkill[]
+    }
+
+    class FireCircle {
+        +number radius
+        +number tickDamage
+        +number tickInterval
+    }
+
+    class LightningStrike {
+        +number strikeCount
+        +number strikeDamage
+        +number strikeRadius
+    }
+
+    class ShurikenOrbit {
+        +number shurikenCount
+        +number orbitRadius
+        +number rotationSpeed
+    }
+
+    class Shield {
+        +number shieldHP
+        +number rechargeTime
+    }
+
+    class SpeedBoost {
+        +number speedMultiplier
+    }
+
+    class DamageUp {
+        +number damageMultiplier
+    }
+
+    ISkill <|.. FireCircle
+    ISkill <|.. LightningStrike
+    ISkill <|.. ShurikenOrbit
+    ISkill <|.. Shield
+    ISkill <|.. SpeedBoost
+    ISkill <|.. DamageUp
+
+    SkillManager --> ISkill
+    SkillManager --> SkillRegistry
+```
+
+### 3.4 Manager System
+
+```mermaid
+classDiagram
+    class GameScene {
+        +Player[] players
+        +Group enemies
+        +Group projectiles
+        +Group pickups
+        +InputManager inputManager
+        +SpawnManager spawnManager
+        +WaveManager waveManager
+        +CombatSystem combatSystem
+        +NetworkManager networkManager
+        +create()
+        +update(time: number, delta: number)
+    }
+
+    class WaveManager {
+        -number currentWave
+        -number waveTimer
+        -WaveConfig[] waveConfigs
+        -number difficultyMultiplier
+        +getCurrentWave(): number
+        +getDifficulty(): number
+        +update(delta: number)
+        +getSpawnConfig(): SpawnConfig
+        +onWaveComplete()
+    }
+
+    class SpawnManager {
+        -ObjectPool~BaseEnemy~ enemyPool
+        -SpawnPoint[] spawnPoints
+        -number spawnTimer
+        -number maxEnemies
+        +spawnEnemy(type: EnemyType, position: Vector2): BaseEnemy
+        +spawnWave(config: SpawnConfig)
+        +getActiveEnemyCount(): number
+        +update(delta: number)
+        +recycleEnemy(enemy: BaseEnemy)
+    }
+
+    class InputManager {
+        -Phaser.Input.Keyboard.CursorKeys cursors
+        -Phaser.Input.Pointer pointer
+        -VirtualJoystick joystick
+        -boolean isMobile
+        +getMovementVector(): Vector2
+        +isActionPressed(): boolean
+        +setupMobileControls()
+        +setupDesktopControls()
+        +update()
+    }
+
+    class NetworkManager {
+        -SocketClient socket
+        -string roomId
+        -string playerId
+        -InputBuffer inputBuffer
+        +connect(serverUrl: string)
+        +createRoom(): Promise~string~
+        +joinRoom(roomCode: string)
+        +sendInput(input: InputState)
+        +onStateUpdate(callback: Function)
+        +onPlayerJoined(callback: Function)
+        +onPlayerLeft(callback: Function)
+        +disconnect()
+    }
+
+    class AchievementManager {
+        -Achievement[] achievements
+        -Achievement[] unlocked
+        -EventBus eventBus
+        +checkAchievement(event: GameEvent)
+        +unlock(achievementId: string)
+        +getProgress(achievementId: string): number
+        +getUnlocked(): Achievement[]
+        +save()
+        +load()
+    }
+
+    class AudioManager {
+        -Map~string, Sound~ sounds
+        -Sound currentBGM
+        -number sfxVolume
+        -number bgmVolume
+        +playSFX(key: string)
+        +playBGM(key: string)
+        +stopBGM()
+        +setVolume(type: AudioType, volume: number)
+    }
+
+    class ObjectPoolManager {
+        -Map~string, ObjectPool~ pools
+        +getPool~T~(key: string): ObjectPool~T~
+        +createPool~T~(key: string, factory: Function, size: number)
+        +get~T~(key: string): T
+        +release~T~(key: string, obj: T)
+    }
+
+    class CameraManager {
+        -Phaser.Cameras.Scene2D.Camera camera
+        -Player[] targets
+        -number smoothing
+        +followPlayers(players: Player[])
+        +shake(intensity: number, duration: number)
+        +flash(color: number, duration: number)
+        +zoom(level: number, duration: number)
+        +update()
+    }
+
+    GameScene --> WaveManager
+    GameScene --> SpawnManager
+    GameScene --> InputManager
+    GameScene --> NetworkManager
+    GameScene --> AchievementManager
+    GameScene --> AudioManager
+    GameScene --> ObjectPoolManager
+    GameScene --> CameraManager
+```
+
+### 3.5 Server Architecture
+
+```mermaid
+classDiagram
+    class Server {
+        -RoomManager roomManager
+        -SocketServer socketServer
+        +start(port: number)
+        +stop()
+    }
+
+    class RoomManager {
+        -Map~string, GameRoom~ rooms
+        +createRoom(hostId: string): GameRoom
+        +joinRoom(roomCode: string, playerId: string): boolean
+        +leaveRoom(roomCode: string, playerId: string)
+        +getRoom(roomCode: string): GameRoom
+        +removeRoom(roomCode: string)
+        +generateRoomCode(): string
+    }
+
+    class GameRoom {
+        +string roomCode
+        +PlayerData[] players
+        +ServerGameState gameState
+        +GamePhase phase
+        +number maxPlayers
+        +number roundTimer
+        +startGame()
+        +endGame()
+        +processInput(playerId: string, input: InputState)
+        +tick(delta: number)
+        +broadcastState()
+    }
+
+    class ServerGameState {
+        +EntityState[] entities
+        +WaveState waveState
+        +number elapsedTime
+        +Map~string, PlayerState~ playerStates
+        +serialize(): Buffer
+        +applyInput(playerId: string, input: InputState)
+        +simulate(delta: number)
+    }
+
+    class LeaderboardStore {
+        -LeaderboardEntry[] entries
+        +addEntry(entry: LeaderboardEntry)
+        +getTopEntries(count: number): LeaderboardEntry[]
+        +getPlayerRank(playerId: string): number
+        +save()
+        +load()
+    }
+
+    Server --> RoomManager
+    Server --> LeaderboardStore
+    RoomManager --> GameRoom
+    GameRoom --> ServerGameState
+```
+
+### 3.6 Type Definitions
+
+```mermaid
+classDiagram
+    class PlayerStats {
+        +number maxHP
+        +number damage
+        +number attackSpeed
+        +number moveSpeed
+        +number armor
+        +number critChance
+        +number critDamage
+        +number xpMultiplier
+        +number pickupRange
+        +number cooldownReduction
+    }
+
+    class WaveConfig {
+        +number waveNumber
+        +EnemySpawn[] enemies
+        +number spawnInterval
+        +number maxConcurrent
+        +boolean hasBoss
+        +string bossType
+    }
+
+    class EnemySpawn {
+        +EnemyType type
+        +number weight
+        +number minWave
+        +number hpMultiplier
+        +number damageMultiplier
+    }
+
+    class Achievement {
+        +string id
+        +string name
+        +string description
+        +string iconKey
+        +AchievementTier tier
+        +number targetValue
+        +number currentValue
+        +boolean unlocked
+        +Date unlockedAt
+    }
+
+    class LeaderboardEntry {
+        +string playerId
+        +string playerName
+        +number score
+        +number kills
+        +number wave
+        +number survivalTime
+        +number playerCount
+        +Date timestamp
+    }
+
+    class DamageResult {
+        +number finalDamage
+        +boolean isCrit
+        +DamageType type
+        +Vector2 knockback
+    }
+
+    class StatusEffect {
+        +string id
+        +EffectType type
+        +number duration
+        +number remaining
+        +number value
+        +number tickInterval
+    }
+
+    WaveConfig --> EnemySpawn
+```
+
+---
+
+## 4. Development Roadmap
+
+### Phase Overview
+
+```mermaid
+gantt
+    title Pixel Horde Development Roadmap
+    dateFormat  YYYY-MM-DD
+    axisFormat  %b %d
+
+    section Phase 1 - Foundation
+    Project Setup & Tooling       :p1a, 2026-08-01, 3d
+    Core Game Loop                :p1b, after p1a, 5d
+    Player Movement & Animation   :p1c, after p1b, 4d
+    Basic Enemy + AI              :p1d, after p1c, 5d
+    Auto-Attack System            :p1e, after p1d, 3d
+    Collision & Damage            :p1f, after p1e, 3d
+
+    section Phase 2 - Core Systems
+    Wave & Spawn System           :p2a, after p1f, 5d
+    XP & Level-Up System          :p2b, after p2a, 4d
+    Skill System (6 skills)       :p2c, after p2b, 7d
+    Object Pooling                :p2d, after p2c, 3d
+    Camera System                 :p2e, after p2d, 2d
+
+    section Phase 3 - Content
+    All Enemy Types (8)           :p3a, after p2e, 7d
+    All Skills (16)               :p3b, after p3a, 10d
+    3 Arena Maps                  :p3c, after p3a, 7d
+    Pickup Items                  :p3d, after p3b, 3d
+    Boss Encounters               :p3e, after p3d, 5d
+
+    section Phase 4 - Multiplayer
+    Server Setup                  :p4a, after p3e, 4d
+    Room System                   :p4b, after p4a, 5d
+    State Sync & Interpolation    :p4c, after p4b, 7d
+    Lobby UI                      :p4d, after p4c, 3d
+    Co-op Testing & Tuning        :p4e, after p4d, 5d
+
+    section Phase 5 - Meta & Polish
+    Achievement System            :p5a, after p4e, 5d
+    Leaderboard                   :p5b, after p5a, 4d
+    Full UI / HUD                 :p5c, after p5b, 7d
+    Audio Integration             :p5d, after p5c, 4d
+    Mobile Controls               :p5e, after p5d, 5d
+    Particle Effects              :p5f, after p5e, 4d
+
+    section Phase 6 - QA & Launch
+    Balancing & Tuning            :p6a, after p5f, 7d
+    Performance Optimization      :p6b, after p6a, 5d
+    Cross-Platform Testing        :p6c, after p6b, 5d
+    Bug Fixing                    :p6d, after p6c, 5d
+    Soft Launch                   :p6e, after p6d, 2d
+```
+
+---
+
+### Phase 1 — Foundation (3 สัปดาห์)
+
+> **เป้าหมาย:** Player 1 คนเดินได้ ยิงได้ มีศัตรูมาตาย
+
+| # | Task | รายละเอียด | วัน |
+|---|------|-----------|-----|
+| 1.1 | Project Setup | Init Vite + Phaser 3 + TypeScript, ESLint, folder structure | 3 |
+| 1.2 | Core Game Loop | `BootScene → PreloadScene → GameScene`, basic update loop | 5 |
+| 1.3 | Player | Sprite 16×16, 4-direction movement, WASD + touch, animation state machine | 4 |
+| 1.4 | Basic Enemy | Zombie entity, chase AI, spawn from edge, placeholder sprite | 5 |
+| 1.5 | Auto-Attack | Auto-target nearest enemy, fire projectile, cooldown timer | 3 |
+| 1.6 | Collision | Arcade physics, projectile↔enemy, enemy↔player, damage numbers | 3 |
+
+**Deliverable:** Singleplayer prototype — move + shoot + enemies chase
+
+---
+
+### Phase 2 — Core Systems (3 สัปดาห์)
+
+> **เป้าหมาย:** เล่นได้จริง มี level up กับ skill
+
+| # | Task | รายละเอียด | วัน |
+|---|------|-----------|-----|
+| 2.1 | Wave System | Configurable waves, difficulty curve, spawn rate escalation, timer 8–10 min | 5 |
+| 2.2 | XP System | XP gems drop, magnet attract, XP bar, level thresholds | 4 |
+| 2.3 | Skill System | `ISkill` interface, SkillManager, random 3-pick overlay, 6 initial skills | 7 |
+| 2.4 | Object Pooling | Pool enemies, projectiles, pickups เพื่อ performance | 3 |
+| 2.5 | Camera | Dynamic camera, multi-target follow, screen shake | 2 |
+
+**Deliverable:** Singleplayer core loop complete — kill → XP → level up → pick skill → repeat
+
+---
+
+### Phase 3 — Content (4 สัปดาห์)
+
+> **เป้าหมาย:** เนื้อหาเกมครบถ้วน ศัตรูหลายแบบ skill หลากหลาย
+
+| # | Task | รายละเอียด | วัน |
+|---|------|-----------|-----|
+| 3.1 | Enemy Types | Zombie, Skeleton, Bat, Slime, Ghost, Orc, Necromancer (7 types) | 7 |
+| 3.2 | All Skills | 6 offensive + 4 defensive + 6 passive = 16 skills, upgradeable 5 levels | 10 |
+| 3.3 | Arena Maps | Forest, Dungeon, Graveyard — Tiled maps กับ collision layers | 7 |
+| 3.4 | Pickups | Health orb, magnet pickup, rare chest | 3 |
+| 3.5 | Boss | BossGolem with phases, unique attack patterns, health bar | 5 |
+
+**Deliverable:** Full singleplayer game with variety
+
+---
+
+### Phase 4 — Multiplayer (3.5 สัปดาห์)
+
+> **เป้าหมาย:** 2–4 players เล่นด้วยกันได้
+
+| # | Task | รายละเอียด | วัน |
+|---|------|-----------|-----|
+| 4.1 | Server Setup | Node.js + Socket.IO, Express, basic connection | 4 |
+| 4.2 | Room System | Create/join room, room code, max 4 players, host migration | 5 |
+| 4.3 | State Sync | Input buffer, state interpolation, lag compensation, delta compression | 7 |
+| 4.4 | Lobby UI | Room code display, player list, ready up, character select | 3 |
+| 4.5 | Co-op Tuning | Enemy scaling per player count, shared XP, revival mechanic | 5 |
+
+**Deliverable:** Fully playable 1–4 player co-op
+
+---
+
+### Phase 5 — Meta & Polish (4 สัปดาห์)
+
+> **เป้าหมาย:** ระบบ meta-game ครบ UI สวย เสียงครบ
+
+| # | Task | รายละเอียด | วัน |
+|---|------|-----------|-----|
+| 5.1 | Achievements | 20+ achievements, progress tracking, unlock popup, localStorage | 5 |
+| 5.2 | Leaderboard | Top scores, filter by player count, server-side storage | 4 |
+| 5.3 | Full UI/HUD | Main menu, pause, settings, game over screen, responsive layout | 7 |
+| 5.4 | Audio | BGM per arena, 20+ SFX, volume controls, spatial audio | 4 |
+| 5.5 | Mobile Controls | Virtual joystick, responsive UI scaling, touch-friendly buttons | 5 |
+| 5.6 | Particles | Hit sparks, death explosions, XP pickup glow, level-up burst, trail FX | 4 |
+
+**Deliverable:** Polished, ship-ready game
+
+---
+
+### Phase 6 — QA & Launch (3.5 สัปดาห์)
+
+> **เป้าหมาย:** Balance ดี bug-free พร้อมปล่อย
+
+| # | Task | รายละเอียด | วัน |
+|---|------|-----------|-----|
+| 6.1 | Balance | Enemy HP/damage curves, skill effectiveness, XP pacing, difficulty scaling | 7 |
+| 6.2 | Performance | Profile & optimize, texture atlases, reduce draw calls, 60fps target | 5 |
+| 6.3 | Cross-Platform | Test on Chrome/Firefox/Safari, iOS Safari, Android Chrome, various resolutions | 5 |
+| 6.4 | Bug Fix | QA pass, fix critical bugs, edge cases, memory leaks | 5 |
+| 6.5 | Soft Launch | Deploy to hosting, monitoring, analytics setup | 2 |
+
+**Deliverable:** 🚀 Launch!
+
+> **Total Estimated Duration: ~21 สัปดาห์ (5 เดือน)**
+
+---
+
+## 5. Asset List
+
+### 5.1 Character Sprites (16×16 per frame)
+
+| Asset | ขนาด Sheet | Animations | Frames |
+|-------|-----------|------------|--------|
+| `player_warrior.png` | 128×64 | idle(4), walk(4), attack(4), hurt(2), death(4) | 18 |
+| `player_mage.png` | 128×64 | idle(4), walk(4), attack(4), hurt(2), death(4) | 18 |
+| `player_rogue.png` | 128×64 | idle(4), walk(4), attack(4), hurt(2), death(4) | 18 |
+| `player_ranger.png` | 128×64 | idle(4), walk(4), attack(4), hurt(2), death(4) | 18 |
+
+### 5.2 Enemy Sprites (16×16 per frame)
+
+| Asset | Animations | Frames | หมายเหตุ |
+|-------|------------|--------|----------|
+| `enemy_zombie.png` | idle(4), walk(4), attack(3), death(4) | 15 | Common, slow |
+| `enemy_skeleton.png` | idle(4), walk(4), attack(3), death(4) | 15 | Ranged, medium |
+| `enemy_bat.png` | fly(4), attack(3), death(3) | 10 | Fast, flying |
+| `enemy_slime.png` | idle(4), hop(6), death(4), split(3) | 17 | Splits on death |
+| `enemy_ghost.png` | float(4), attack(3), death(4) | 11 | Phasing, ignores walls |
+| `enemy_orc.png` | idle(4), walk(4), attack(4), death(4) | 16 | Tanky, strong |
+| `enemy_necromancer.png` | idle(4), cast(6), death(4) | 14 | Summons minions |
+| `boss_golem.png` (32×32) | idle(4), walk(4), slam(6), throw(4), rage(4), death(6) | 28 | 2× size boss |
+
+### 5.3 Projectile Sprites (8×8 – 16×16)
+
+| Asset | Size | Frames | หมายเหตุ |
+|-------|------|--------|----------|
+| `proj_bullet.png` | 8×8 | 2 | Basic projectile |
+| `proj_arrow.png` | 16×8 | 1 | Ranger basic |
+| `proj_fireball.png` | 16×16 | 4 | Animated fire |
+| `proj_lightning.png` | 16×32 | 3 | Lightning bolt |
+| `proj_shuriken.png` | 8×8 | 4 | Rotating star |
+| `proj_poison.png` | 16×16 | 4 | Poison cloud |
+| `proj_meteor.png` | 16×16 | 4 | Falling meteor |
+| `proj_bone.png` | 8×8 | 2 | Skeleton ranged |
+| `proj_shadow_bolt.png` | 16×16 | 4 | Necromancer spell |
+
+### 5.4 Pickup Sprites (8×8 – 16×16)
+
+| Asset | Size | Frames | หมายเหตุ |
+|-------|------|--------|----------|
+| `pickup_xp_small.png` | 8×8 | 4 | Green gem, shimmer |
+| `pickup_xp_medium.png` | 8×8 | 4 | Blue gem |
+| `pickup_xp_large.png` | 8×8 | 4 | Gold gem |
+| `pickup_health.png` | 8×8 | 4 | Red orb, pulse |
+| `pickup_magnet.png` | 8×8 | 4 | Purple magnet |
+| `pickup_chest.png` | 16×16 | 3 | Rare treasure |
+
+### 5.5 VFX & Particles (16×16)
+
+| Asset | Frames | หมายเหตุ |
+|-------|--------|----------|
+| `fx_hit_spark.png` | 4 | White/yellow flash |
+| `fx_explosion.png` | 6 | Enemy death poof |
+| `fx_fire_circle.png` | 8 | Fire Circle skill |
+| `fx_lightning_strike.png` | 6 | Lightning Strike skill |
+| `fx_heal.png` | 4 | Green particle rise |
+| `fx_shield.png` | 4 | Blue barrier pulse |
+| `fx_levelup.png` | 6 | Golden burst outward |
+| `fx_crit.png` | 3 | Critical hit star |
+| `fx_poison_cloud.png` | 6 | Green toxic mist |
+| `fx_damage_number_font.png` | — | Bitmap font sheet |
+
+### 5.6 Tileset Assets (16×16 per tile)
+
+| Asset | Tiles | หมายเหตุ |
+|-------|-------|----------|
+| `tileset_forest.png` | 64 (8×8 grid) | Grass, dirt, trees, bushes, rocks, water edge |
+| `tileset_dungeon.png` | 64 | Stone floor, walls, pillars, torches, chains |
+| `tileset_graveyard.png` | 64 | Dead grass, tombstones, fences, fog, crypts |
+| `tileset_decorations.png` | 32 | Crates, barrels, pots, bones, misc props |
+
+### 5.7 UI Assets
+
+| Asset | Size | หมายเหตุ |
+|-------|------|----------|
+| `ui_hp_bar.png` | 64×8 | 9-slice health bar (green→yellow→red) |
+| `ui_xp_bar.png` | 128×6 | 9-slice XP bar (blue gradient) |
+| `ui_boss_hp_bar.png` | 200×12 | Boss health bar w/ name frame |
+| `ui_timer.png` | 48×16 | Clock icon + background |
+| `ui_kill_icon.png` | 16×16 | Skull icon for counter |
+| `ui_wave_banner.png` | 128×32 | "WAVE X" banner scroll |
+| `ui_panel_9slice.png` | 48×48 | Dark panel w/ gold border |
+| `ui_button_normal.png` | 64×16 | Button states: normal |
+| `ui_button_hover.png` | 64×16 | Button states: hover |
+| `ui_button_pressed.png` | 64×16 | Button states: pressed |
+| `ui_skill_frame.png` | 24×24 | Skill card border |
+| `ui_skill_frame_rare.png` | 24×24 | Rare skill card (purple border) |
+| `ui_skill_frame_epic.png` | 24×24 | Epic skill card (gold border) |
+| `ui_joystick_base.png` | 64×64 | Virtual joystick outer |
+| `ui_joystick_thumb.png` | 32×32 | Virtual joystick inner |
+| `ui_minimap_frame.png` | 80×80 | Minimap border |
+| `ui_achievement_popup.png` | 128×32 | Achievement toast frame |
+| `ui_logo.png` | 160×80 | "PIXEL HORDE" game logo |
+| `ui_cursor.png` | 16×16 | Custom pixel cursor |
+
+### 5.8 Skill Icons (16×16 each)
+
+| Asset | Skill |
+|-------|-------|
+| `icon_fire_circle.png` | Fire Circle |
+| `icon_lightning_strike.png` | Lightning Strike |
+| `icon_poison_cloud.png` | Poison Cloud |
+| `icon_shuriken_orbit.png` | Shuriken Orbit |
+| `icon_meteor_shower.png` | Meteor Shower |
+| `icon_chain_lightning.png` | Chain Lightning |
+| `icon_shield.png` | Shield |
+| `icon_regeneration.png` | Regeneration |
+| `icon_thorns.png` | Thorns |
+| `icon_dodge_roll.png` | Dodge Roll |
+| `icon_speed_boost.png` | Speed Boost |
+| `icon_damage_up.png` | Damage Up |
+| `icon_xp_magnet.png` | XP Magnet |
+| `icon_crit_chance.png` | Crit Chance |
+| `icon_cooldown_reduction.png` | Cooldown Reduction |
+| `icon_multi_shot.png` | Multi Shot |
+
+### 5.9 Achievement Icons (16×16 each)
+
+| Asset | Achievement |
+|-------|------------|
+| `ach_first_blood.png` | First Kill |
+| `ach_centurion.png` | 100 Kills |
+| `ach_massacre.png` | 500 Kills |
+| `ach_annihilator.png` | 1000 Kills |
+| `ach_wave_5.png` | Survive Wave 5 |
+| `ach_wave_10.png` | Survive Wave 10 |
+| `ach_wave_20.png` | Survive Wave 20 |
+| `ach_boss_slayer.png` | Defeat Boss |
+| `ach_full_party.png` | Play with 4 Players |
+| `ach_skill_master.png` | Max Out a Skill |
+| `ach_no_damage.png` | Clear a Wave with No Damage |
+| `ach_speedrun.png` | Survive 10 min |
+| `ach_collector.png` | Collect 500 XP Gems in 1 Round |
+| `ach_max_level.png` | Reach Max Level |
+
+### 5.10 Audio Assets
+
+| Asset | Type | Duration | หมายเหตุ |
+|-------|------|----------|----------|
+| **BGM** | | | |
+| `bgm_menu.ogg` | Music | ~60s loop | Ambient, mysterious |
+| `bgm_forest.ogg` | Music | ~90s loop | Upbeat action, forest |
+| `bgm_dungeon.ogg` | Music | ~90s loop | Dark, tense |
+| `bgm_graveyard.ogg` | Music | ~90s loop | Eerie, intense |
+| `bgm_boss.ogg` | Music | ~60s loop | Intense, epic |
+| `bgm_gameover.ogg` | Music | ~15s | Somber, short |
+| **SFX** | | | |
+| `sfx_attack_sword.ogg` | SFX | <1s | Slash/swing |
+| `sfx_attack_bow.ogg` | SFX | <1s | Arrow release |
+| `sfx_attack_magic.ogg` | SFX | <1s | Spell cast |
+| `sfx_hit_normal.ogg` | SFX | <1s | Damage impact |
+| `sfx_hit_crit.ogg` | SFX | <1s | Critical hit, louder |
+| `sfx_enemy_death.ogg` | SFX | <1s | Pop/splat |
+| `sfx_boss_roar.ogg` | SFX | ~2s | Boss entrance |
+| `sfx_xp_collect.ogg` | SFX | <1s | Chime, high pitch |
+| `sfx_level_up.ogg` | SFX | ~2s | Fanfare jingle |
+| `sfx_skill_select.ogg` | SFX | <1s | Confirm chime |
+| `sfx_player_hurt.ogg` | SFX | <1s | Pain grunt |
+| `sfx_player_death.ogg` | SFX | ~2s | Death sound |
+| `sfx_shield_hit.ogg` | SFX | <1s | Shield absorb |
+| `sfx_fire.ogg` | SFX | <1s | Fire whoosh |
+| `sfx_lightning.ogg` | SFX | <1s | Electric zap |
+| `sfx_poison.ogg` | SFX | <1s | Toxic bubble |
+| `sfx_heal.ogg` | SFX | <1s | Healing sparkle |
+| `sfx_chest_open.ogg` | SFX | ~1s | Chest opening |
+| `sfx_wave_start.ogg` | SFX | ~2s | Horn/warning |
+| `sfx_achievement.ogg` | SFX | ~2s | Achievement unlocked |
+| **UI SFX** | | | |
+| `sfx_ui_click.ogg` | SFX | <1s | Button click |
+| `sfx_ui_hover.ogg` | SFX | <1s | Button hover |
+| `sfx_ui_back.ogg` | SFX | <1s | Menu back |
+
+### 5.11 Tilemap Files (Tiled JSON)
+
+| Asset | หมายเหตุ |
+|-------|----------|
+| `arena_forest.json` | Forest arena — open fields, tree clusters, river edges |
+| `arena_dungeon.json` | Dungeon arena — narrow corridors, pillars, torch-lit rooms |
+| `arena_graveyard.json` | Graveyard arena — tombstones for cover, open crypts, fog zones |
+
+### 5.12 Font Assets
+
+| Asset | หมายเหตุ |
+|-------|----------|
+| `font_pixel_8.png` + `.xml` | 8px bitmap font for damage numbers |
+| `font_pixel_16.png` + `.xml` | 16px bitmap font for UI text |
+| `font_pixel_24.png` + `.xml` | 24px bitmap font for titles |
+
+---
+
+### Asset Summary
+
+| Category | Count |
+|----------|-------|
+| Character Spritesheets | 4 |
+| Enemy Spritesheets | 8 |
+| Projectile Sprites | 9 |
+| Pickup Sprites | 6 |
+| VFX / Particles | 10 |
+| Tilesets | 4 |
+| UI Elements | 20 |
+| Skill Icons | 16 |
+| Achievement Icons | 14 |
+| Audio — BGM | 6 |
+| Audio — SFX | 22 |
+| Tilemaps (JSON) | 3 |
+| Fonts | 3 sets |
+| **Total Assets** | **~125 files** |
+
+---
+
+## 6. Complete File List
+
+### 6.1 Client Files
+
+```
+client/
+├── public/
+│   ├── index.html
+│   └── favicon.ico
+│
+├── src/
+│   ├── main.ts
+│   │
+│   ├── config/
+│   │   ├── game.config.ts
+│   │   ├── balance.config.ts
+│   │   ├── wave.config.ts
+│   │   ├── skill.config.ts
+│   │   ├── enemy.config.ts
+│   │   ├── achievement.config.ts
+│   │   └── constants.ts
+│   │
+│   ├── scenes/
+│   │   ├── BootScene.ts
+│   │   ├── PreloadScene.ts
+│   │   ├── MainMenuScene.ts
+│   │   ├── LobbyScene.ts
+│   │   ├── GameScene.ts
+│   │   ├── GameOverScene.ts
+│   │   ├── LeaderboardScene.ts
+│   │   └── SettingsScene.ts
+│   │
+│   ├── entities/
+│   │   ├── player/
+│   │   │   ├── Player.ts
+│   │   │   ├── PlayerAnimations.ts
+│   │   │   └── PlayerController.ts
+│   │   │
+│   │   ├── enemies/
+│   │   │   ├── BaseEnemy.ts
+│   │   │   ├── Zombie.ts
+│   │   │   ├── Skeleton.ts
+│   │   │   ├── Bat.ts
+│   │   │   ├── Slime.ts
+│   │   │   ├── Ghost.ts
+│   │   │   ├── Orc.ts
+│   │   │   ├── Necromancer.ts
+│   │   │   └── BossGolem.ts
+│   │   │
+│   │   ├── projectiles/
+│   │   │   ├── BaseProjectile.ts
+│   │   │   ├── Bullet.ts
+│   │   │   ├── Arrow.ts
+│   │   │   ├── Fireball.ts
+│   │   │   ├── LightningBolt.ts
+│   │   │   └── Shuriken.ts
+│   │   │
+│   │   └── pickups/
+│   │       ├── BasePickup.ts
+│   │       ├── XPGem.ts
+│   │       ├── HealthOrb.ts
+│   │       └── MagnetPickup.ts
+│   │
+│   ├── components/
+│   │   ├── HealthComponent.ts
+│   │   ├── MovementComponent.ts
+│   │   ├── CombatComponent.ts
+│   │   ├── CollisionComponent.ts
+│   │   ├── AIComponent.ts
+│   │   ├── AnimationComponent.ts
+│   │   └── StatusEffectComponent.ts
+│   │
+│   ├── skills/
+│   │   ├── ISkill.ts
+│   │   ├── SkillRegistry.ts
+│   │   ├── offensive/
+│   │   │   ├── FireCircle.ts
+│   │   │   ├── LightningStrike.ts
+│   │   │   ├── PoisonCloud.ts
+│   │   │   ├── ShurikenOrbit.ts
+│   │   │   ├── MeteorShower.ts
+│   │   │   └── ChainLightning.ts
+│   │   │
+│   │   ├── defensive/
+│   │   │   ├── Shield.ts
+│   │   │   ├── Regeneration.ts
+│   │   │   ├── Thorns.ts
+│   │   │   └── DodgeRoll.ts
+│   │   │
+│   │   └── passive/
+│   │       ├── SpeedBoost.ts
+│   │       ├── DamageUp.ts
+│   │       ├── XPMagnet.ts
+│   │       ├── CritChance.ts
+│   │       ├── CooldownReduction.ts
+│   │       └── MultiShot.ts
+│   │
+│   ├── managers/
+│   │   ├── InputManager.ts
+│   │   ├── AudioManager.ts
+│   │   ├── NetworkManager.ts
+│   │   ├── SpawnManager.ts
+│   │   ├── WaveManager.ts
+│   │   ├── SkillManager.ts
+│   │   ├── AchievementManager.ts
+│   │   ├── CameraManager.ts
+│   │   ├── ParticleManager.ts
+│   │   ├── LeaderboardManager.ts
+│   │   └── ObjectPoolManager.ts
+│   │
+│   ├── systems/
+│   │   ├── CombatSystem.ts
+│   │   ├── CollisionSystem.ts
+│   │   ├── XPSystem.ts
+│   │   ├── LevelUpSystem.ts
+│   │   ├── StatusEffectSystem.ts
+│   │   └── AutoAttackSystem.ts
+│   │
+│   ├── ui/
+│   │   ├── hud/
+│   │   │   ├── HUD.ts
+│   │   │   ├── HealthBar.ts
+│   │   │   ├── XPBar.ts
+│   │   │   ├── WaveIndicator.ts
+│   │   │   ├── TimerDisplay.ts
+│   │   │   ├── KillCounter.ts
+│   │   │   ├── MiniMap.ts
+│   │   │   └── PlayerStatusBar.ts
+│   │   │
+│   │   ├── menus/
+│   │   │   ├── MainMenu.ts
+│   │   │   ├── PauseMenu.ts
+│   │   │   ├── SettingsMenu.ts
+│   │   │   └── CharacterSelect.ts
+│   │   │
+│   │   ├── overlays/
+│   │   │   ├── SkillPickOverlay.ts
+│   │   │   ├── LevelUpOverlay.ts
+│   │   │   ├── AchievementPopup.ts
+│   │   │   ├── DamageNumber.ts
+│   │   │   └── GameOverOverlay.ts
+│   │   │
+│   │   └── common/
+│   │       ├── Button.ts
+│   │       ├── Panel.ts
+│   │       ├── ProgressBar.ts
+│   │       ├── Tooltip.ts
+│   │       └── ScrollList.ts
+│   │
+│   ├── network/
+│   │   ├── SocketClient.ts
+│   │   ├── NetworkEvents.ts
+│   │   ├── StateSync.ts
+│   │   ├── InputBuffer.ts
+│   │   └── Interpolation.ts
+│   │
+│   ├── utils/
+│   │   ├── MathUtils.ts
+│   │   ├── RandomUtils.ts
+│   │   ├── ObjectPool.ts
+│   │   ├── EventBus.ts
+│   │   ├── Timer.ts
+│   │   ├── Storage.ts
+│   │   └── Debug.ts
+│   │
+│   └── types/
+│       ├── game.types.ts
+│       ├── entity.types.ts
+│       ├── skill.types.ts
+│       ├── network.types.ts
+│       ├── ui.types.ts
+│       └── achievement.types.ts
+│
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+└── .eslintrc.json
+```
+
+### 6.2 Server Files
+
+```
+server/
+├── src/
+│   ├── main.ts
+│   │
+│   ├── core/
+│   │   ├── Server.ts
+│   │   ├── RoomManager.ts
+│   │   ├── GameRoom.ts
+│   │   └── GameLoop.ts
+│   │
+│   ├── game/
+│   │   ├── ServerGameState.ts
+│   │   ├── ServerSpawnManager.ts
+│   │   ├── ServerCombatResolver.ts
+│   │   └── ServerWaveManager.ts
+│   │
+│   ├── network/
+│   │   ├── SocketServer.ts
+│   │   ├── MessageHandler.ts
+│   │   └── NetworkEvents.ts
+│   │
+│   ├── data/
+│   │   ├── LeaderboardStore.ts
+│   │   ├── AchievementStore.ts
+│   │   └── PlayerStore.ts
+│   │
+│   └── types/
+│       ├── server.types.ts
+│       └── room.types.ts
+│
+├── package.json
+└── tsconfig.json
+```
+
+### 6.3 Shared Files
+
+```
+shared/
+├── types/
+│   ├── protocol.ts
+│   ├── game-state.ts
+│   └── events.ts
+│
+├── config/
+│   ├── balance.ts
+│   └── constants.ts
+│
+└── utils/
+    ├── math.ts
+    └── validation.ts
+```
+
+### 6.4 Root Files
+
+```
+pixel-horde/
+├── package.json           # Workspace root (npm workspaces)
+├── README.md
+├── .gitignore
+├── .prettierrc
+└── .eslintrc.json
+```
+
+### File Count Summary
+
+| Category | Files |
+|----------|-------|
+| Client — Scenes | 8 |
+| Client — Entities | 22 |
+| Client — Components | 7 |
+| Client — Skills | 18 |
+| Client — Managers | 11 |
+| Client — Systems | 6 |
+| Client — UI | 22 |
+| Client — Network | 5 |
+| Client — Utils | 7 |
+| Client — Types | 6 |
+| Client — Config | 7 |
+| Client — Build/Config | 4 |
+| Server — All | 14 |
+| Shared — All | 7 |
+| Root — Config | 4 |
+| **Total Source Files** | **~148 files** |
+| **Total Assets** | **~125 files** |
+| **Grand Total** | **~273 files** |
+
+---
+
+## Appendix A: Key Design Decisions
+
+### A.1 ทำไมเลือก Client-Authoritative with Server Validation?
+
+| แบบ | ข้อดี | ข้อเสีย |
+|-----|-------|---------|
+| **Full Server Authority** | ป้องกันโกงได้ 100% | Latency สูง, server load หนัก |
+| **Client Authority** | Responsive ทันที | โกงได้ง่าย |
+| **✅ Client Auth + Server Validate** | Responsive + โกงยากขึ้น | ต้องเขียน validation logic |
+
+→ เกม co-op ไม่มี PvP จึงไม่ต้อง anti-cheat ระดับสูง แต่ server ยัง validate basic rules
+
+### A.2 ทำไมต้อง Object Pooling?
+
+เกม horde survival มีศัตรูหลายร้อยตัว + projectile + XP gems → GC spike ถ้า new/destroy ตลอด
+- Pool enemies: reuse Sprite objects
+- Pool projectiles: recycle ทุก frame
+- Pool pickups: XP gems เยอะมาก
+
+### A.3 Auto-Attack Design
+
+```
+ทุก X ms (ตาม attackSpeed):
+  1. หาศัตรูที่ใกล้ที่สุดใน range
+  2. หันหน้าไปทางศัตรู
+  3. สร้าง projectile ไปทางศัตรู
+  4. เล่น animation + SFX
+```
+
+ผู้เล่นควบคุมแค่ **การเคลื่อนที่** → เน้น positioning + dodging
+
+### A.4 Skill Random Selection
+
+เมื่อ Level Up:
+1. สุ่ม 3 skills จาก pool (weighted by rarity)
+2. ถ้ามี skill ที่มีอยู่แล้ว → แสดงเป็น "upgrade" (level +1)
+3. ถ้า skill max level แล้ว → ไม่เอาเข้า pool
+4. Rarity weights: Common 60%, Rare 30%, Epic 10%
+
+### A.5 Co-op Scaling (per player count)
+
+| Players | Enemy HP | Enemy Count | XP per Kill | Boss HP |
+|---------|----------|-------------|-------------|---------|
+| 1 | ×1.0 | ×1.0 | ×1.0 | ×1.0 |
+| 2 | ×1.4 | ×1.5 | ×0.8 | ×1.8 |
+| 3 | ×1.7 | ×2.0 | ×0.65 | ×2.5 |
+| 4 | ×2.0 | ×2.5 | ×0.55 | ×3.2 |
