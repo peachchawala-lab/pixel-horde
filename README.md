@@ -5,12 +5,12 @@
 
 ---
 
-## 🌟 Overview (ภาพรวมโปรเจกต์)
+## 🌟 Overview 
 **Pixel Horde** เป็นเว็บแอปพลิเคชันเกมแนว 2D Action Roguelite พัฒนาด้วยภาษา **TypeScript** และเอนจิน **Phaser 3** ออกแบบโดยเน้น **Software Architecture**, **Memory Optimization (60 FPS)**, และ **Mathematical Calculations in Computing**
 
 ---
 
-## 🛠️ Key Technical Highlights (จุดเด่นทางเทคนิค)
+## 🛠️ Key Technical Highlights 
 
 * **🧩 Component-Based Entity System:** แยกโมดูลตัวละคร ศัตรู เลือด (`HealthComponent`) และระบบ EXP (`ExperienceComponent`) เพื่อให้โค้ดเป็นระเบียบและ Scale ง่าย
 * **⚡ Object Pooling Architecture:** ใช้ระบบ Recycle กระสุน (Projectiles) และมอนสเตอร์ ลดปัญหา Garbage Collection ทำให้เกมรันได้ 60 FPS นิ่งๆ 
