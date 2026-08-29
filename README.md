@@ -13,7 +13,7 @@
 ## 🛠️ Key Technical Highlights (จุดเด่นทางเทคนิค)
 
 * **🧩 Component-Based Entity System:** แยกโมดูลตัวละคร ศัตรู เลือด (`HealthComponent`) และระบบ EXP (`ExperienceComponent`) เพื่อให้โค้ดเป็นระเบียบและ Scale ง่าย
-* **⚡ Object Pooling Architecture:** ใช้ระบบ Recycle กระสุน (Projectiles) และมอนสเตอร์ ลดปัญหา Garbage Collection ทำให้เกมรันได้ 60 FPS นิ่งๆ ไม่กระตุก
+* **⚡ Object Pooling Architecture:** ใช้ระบบ Recycle กระสุน (Projectiles) และมอนสเตอร์ ลดปัญหา Garbage Collection ทำให้เกมรันได้ 60 FPS นิ่งๆ 
 * **🧠 Multi-Phase Boss AI (Finite State Machine):** บอส *The Necromancer* มีระบบตัดสินใจ 3 เฟส พร้อมการโจมตีแบบ Telegraph, Curse Wall, และ Ring Explosion
 * **🎨 Dynamic Arena Rendering:** เรนเดอร์ลานประลอง *The Necromantic Sanctum* ด้วย Phaser Graphics API พร้อมระบบ Depth Hierarchy Layering
 * **⚔️ Active Ability Hotbar:** ระบบสกิลกดใช้ (Q, E, R) พร้อม Visual & Audio Feedback, Cooldown Sweeps และ Particle Effects
